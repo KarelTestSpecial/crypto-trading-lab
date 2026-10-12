@@ -19,6 +19,12 @@ from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
 
+from src.backtest.calibration import (
+    CalibrationRecorder,
+    brier_score,
+    calibration_table,
+    expected_calibration_error,
+)
 from src.backtest.engine import run_backtest
 from src.backtest.metrics import CostModel
 from src.backtest.report import ReportContext, render_markdown
@@ -34,8 +40,10 @@ from src.config_loader import (
 from src.data.base import Bar, DataError
 from src.data.registry import build_data_provider
 from src.execution.venue import LiveTradingDisabledError, get_venue
+from src.judgment.factory import build_judge
 from src.judgment.jev import JevAdapter, JevClient, JevError, choice, noul, score
 from src.strategy.arms import ARM_DESCRIPTIONS, build_arm
+from src.strategy.judgment import JudgmentStrategy
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
@@ -295,6 +303,110 @@ def cmd_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_judge(args: argparse.Namespace) -> int:
+    try:
+        universe = load_universe(args.universe)
+        params = load_strategy(args.strategy)
+        limits = load_risk()
+    except (ConfigError, ConfigLoadError) as exc:
+        print(f"[FAIL] configuration error: {exc}")
+        return 1
+
+    settings = load_settings()
+    try:
+        provider = _build_provider(settings, args)
+        bars_by_symbol, _ = _load_bars(provider, universe, args)
+    except DataError as exc:
+        print(f"[FAIL] data error: {exc}")
+        return 1
+    if args.symbols:
+        wanted = {s.strip().upper() for s in args.symbols.split(",") if s.strip()}
+        bars_by_symbol = {s: b for s, b in bars_by_symbol.items() if s in wanted}
+    if not bars_by_symbol:
+        print("[FAIL] no bars to judge")
+        return 1
+
+    strategy = JudgmentStrategy(build_judge(args.judge, settings), limits, params=params)
+    ts = max(bar.ts for bars in bars_by_symbol.values() for bar in bars)
+    history = {s: [b for b in bars if b.ts <= ts] for s, bars in bars_by_symbol.items()}
+    try:
+        weights = strategy.target_weights(ts, history)
+    except (JevError, ValueError) as exc:
+        print(f"[FAIL] judgment error: {exc}")
+        return 1
+
+    print("CryptoCadence :: judge")
+    print(f"  ts      = {ts.isoformat()}")
+    print(f"  judge   = {args.judge}")
+    print(f"  limits  = max {limits.max_positions} positions, {limits.max_position_pct:.0%} each")
+    print()
+    print(f"  {'symbol':<12}{'direction':>11}{'confidence':>12}{'weight':>10}")
+    print(f"  {'-' * 12}{'-' * 11}{'-' * 12}{'-' * 10}")
+    for symbol in sorted(bars_by_symbol):
+        j = strategy.last_judgments.get(symbol, {}).get("direction")
+        value = j.value if j else "n/a"
+        conf = f"{j.confidence:.2f}" if j else "n/a"
+        print(f"  {symbol:<12}{value:>11}{conf:>12}{weights.get(symbol, 0.0):>10.2%}")
+    print()
+    print(f"  gross exposure = {sum(weights.values()):.2%}")
+    return 0
+
+
+def cmd_calibrate(args: argparse.Namespace) -> int:
+    try:
+        universe = load_universe(args.universe)
+        params = load_strategy(args.strategy)
+        limits = load_risk()
+    except (ConfigError, ConfigLoadError) as exc:
+        print(f"[FAIL] configuration error: {exc}")
+        return 1
+
+    settings = load_settings()
+    try:
+        provider = _build_provider(settings, args)
+        bars_by_symbol, benchmark = _load_bars(provider, universe, args)
+    except DataError as exc:
+        print(f"[FAIL] data error: {exc}")
+        return 1
+    if not bars_by_symbol or not benchmark:
+        print("[FAIL] no bars available")
+        return 1
+
+    strategy = JudgmentStrategy(build_judge(args.judge, settings), limits, params=params)
+    recorder = CalibrationRecorder()
+    costs = CostModel(fee_bps=args.fee_bps, slippage_bps=args.slippage_bps)
+    try:
+        result = run_backtest(
+            bars_by_symbol,
+            benchmark,
+            strategy,
+            costs,
+            initial_equity=args.equity,
+            on_decision=recorder,
+        )
+    except (JevError, ValueError) as exc:
+        print(f"[FAIL] backtest error: {exc}")
+        return 1
+
+    brier = brier_score(recorder.predictions)
+    ece = expected_calibration_error(recorder.predictions)
+    print("CryptoCadence :: calibrate")
+    print(f"  judge   = {args.judge}")
+    print(f"  cum ret = {result.report['cumulative_return']:+.2%}")
+    print(f"  n preds = {len(recorder.predictions)}")
+    print(f"  brier   = {'n/a' if brier is None else f'{brier:.3f}'}")
+    print(f"  ECE     = {'n/a' if ece is None else f'{ece:.3f}'}")
+    print()
+    print(f"  {'bin':<14}{'count':>7}{'avg prob':>11}{'empirical':>11}")
+    print(f"  {'-' * 14}{'-' * 7}{'-' * 11}{'-' * 11}")
+    for row in calibration_table(recorder.predictions):
+        print(
+            f"  {row['bin_lower']:.1f}-{row['bin_upper']:.1f}"
+            f"{row['count']:>11}{row['avg_prob']:>11.2f}{row['empirical']:>11.2f}"
+        )
+    return 0
+
+
 def _add_data_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--provider", default="csv", choices=["csv", "auto", "kraken", "coinbase"])
     p.add_argument("--data-dir", default=None, help="required when --provider csv")
@@ -345,6 +457,17 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--folds", type=int, default=5, help="number of walk-forward folds")
     report.add_argument("--train-frac", type=float, default=0.4, help="initial in-sample fraction")
     report.set_defaults(func=cmd_report)
+
+    judge = sub.add_parser("judge", help="run the judgment pipeline for the latest bar")
+    _add_data_args(judge)
+    judge.add_argument("--judge", default="rules", choices=["rules", "jev"])
+    judge.add_argument("--symbols", default=None, help="comma-separated subset of symbols")
+    judge.set_defaults(func=cmd_judge)
+
+    calibrate = sub.add_parser("calibrate", help="backtest + Brier/ECE calibration of the judgments")
+    _add_data_args(calibrate)
+    calibrate.add_argument("--judge", default="rules", choices=["rules", "jev"])
+    calibrate.set_defaults(func=cmd_calibrate)
     return parser
 
 

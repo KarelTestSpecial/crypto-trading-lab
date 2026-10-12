@@ -37,7 +37,7 @@ and moves no real money. Live execution is hard-gated and impossible in public-d
 | **0** | Plan + scaffold + guardrails (`Venue` + triple live-gate + HITL) + CI + README + disclaimer | ✅ 12/10/2026 |
 | **1** | Data layer (Kraken/Coinbase/CoinGecko + CSV) + feature engine + backtest with costs + BTC benchmark | ⏳ |
 | **2** | Baseline rules (arm A) + honest metrics report | ⏳ |
-| **3** | **Jev wired as arm C** + calibration (Brier/ECE) | ⏳ |
+| **3** | **Jev wired as arm C** + calibration (Brier/ECE) | ✅ 12/10/2026 |
 | **4** | Hybrid (arm D) + `compare-arms` | ⏳ |
 | **5** | Daily paper loop + journal-in-git + dashboard | ⏳ |
 | **6** | Showcase package + client-facing config/docs | ⏳ |
