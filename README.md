@@ -2,7 +2,7 @@
 
 **Transparent AI-driven paper-trading and backtest platform for crypto.**
 
-CryptoCadence is the crypto counterpart of [`ai-trading-lab` (Cadence)](https://github.com/KarelTestSpecial/ai-trading-lab).
+CryptoCadence is the crypto counterpart of [`ai-trading-lab` (Cadence)](https://github.com/cadence-trading/ai-trading-lab).
 It demonstrates a production-shaped quant/automation stack — data layer, deterministic
 feature engine, a **calibrated AI decision layer (Jev)**, hard risk vetoes, an
 append-only tamper-evident journal and a dashboard — for liquid crypto pairs.
@@ -13,7 +13,7 @@ and moves no real money. Live execution is hard-gated and impossible in public-d
 > **Not investment advice. Simulation only. Past performance — real or simulated — is
 > not indicative of future results.** See [DISCLAIMER.md](DISCLAIMER.md) and [RISICO.md](RISICO.md).
 
-**Live dashboard:** https://kareltestspecial.github.io/crypto-trading-lab/
+**Live dashboard:** https://cadence-trading.github.io/crypto-trading-lab/
 
 ## Why this is different from a "trading bot"
 

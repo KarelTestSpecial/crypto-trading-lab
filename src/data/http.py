@@ -13,7 +13,7 @@ from cadence_core.data.http import http_get_text as _get_text
 from cadence_core.data.http import http_post_json as _post_json
 
 USER_AGENT = (
-    "crypto-trading-lab/0.1 (+https://github.com/KarelTestSpecial/crypto-trading-lab)"
+    "crypto-trading-lab/0.1 (+https://github.com/cadence-trading/crypto-trading-lab)"
 )
 
 __all__ = ["USER_AGENT", "http_get_json", "http_get_text", "http_post_json"]
