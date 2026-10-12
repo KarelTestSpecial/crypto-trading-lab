@@ -1,3 +1,9 @@
 # PII-check exemptions (each with a documented reason).
 # The MIT copyright holder is a deliberate, public author identity.
 LICENSE  # MIT copyright holder (public author identity, intentional)
+# Dependency specs written as "pkg" + version match the email heuristic but
+# contain no PII.
+dashboard/pnpm-lock.yaml
+dashboard/package.json
+# The standard GitHub Actions bot identity (a github noreply address).
+.github/workflows/daily-paper.yml
