@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from cadence_core.judgment.base import JudgmentError, JudgmentModel
+from cadence_core.judgment.jev import JevAdapter, JevClient
+
 from src.config import Settings
-from src.judgment.base import JudgmentError, JudgmentModel
-from src.judgment.jev import JevAdapter, JevClient
 from src.judgment.rules import RuleBasedJudge
 
 

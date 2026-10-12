@@ -5,5 +5,8 @@ LICENSE  # MIT copyright holder (public author identity, intentional)
 # contain no PII.
 dashboard/pnpm-lock.yaml
 dashboard/package.json
+# Same heuristic: the "@v0.1.0" pin in the cadence-core git reference is read as
+# an email address. It is a public dependency URL, not an address.
+pyproject.toml
 # The standard GitHub Actions bot identity (a github noreply address).
 .github/workflows/daily-paper.yml

@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import pytest
-
-from src.config import load_settings
-from src.judgment.base import Judgment
-from src.judgment.jev import (
+from cadence_core.judgment.base import Judgment
+from cadence_core.judgment.jev import (
     JevAdapter,
     JevClient,
     JevError,
@@ -15,6 +13,8 @@ from src.judgment.jev import (
     noul,
     score,
 )
+
+from src.config import load_settings
 
 
 class FakeJevClient:

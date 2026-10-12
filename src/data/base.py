@@ -1,12 +1,9 @@
-"""Data provider interface.
+"""Crypto market-data primitives.
 
-Fase 0 defines the contract only. Fase 1 adds the concrete providers:
-Kraken (primary, MiCA-approved EU), Coinbase (fallback), CoinGecko/CoinPaprika
-(metadata) and CSV (offline backtests). Binance public klines are used only for
-deep backtest history (see PLAN §4).
-
-Reliability rules (PLAN §4): one primary source + cross-check, log the exact
-snapshot used for each decision, and use venue-adjusted candles.
+`DataError` is owned by cadence-core (single source of truth for the data-layer
+error type) and re-exported here so the venue providers import one local module.
+The OHLCV `Bar` and the `DataProvider` contract are venue-specific and live here —
+cadence-core is asset-agnostic on purpose and defines no bar type.
 """
 
 from __future__ import annotations
@@ -15,9 +12,9 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import date, datetime
 
+from cadence_core.data.base import DataError
 
-class DataError(RuntimeError):
-    """Raised when a data source cannot be reached or returns unusable data."""
+__all__ = ["Bar", "DataError", "DataProvider"]
 
 
 @dataclass(frozen=True)
