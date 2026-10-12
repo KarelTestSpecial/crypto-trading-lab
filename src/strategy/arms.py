@@ -18,6 +18,7 @@ from src.context.base import ContextProvider
 from src.features.snapshot import FeatureParams
 from src.judgment.base import JudgmentModel
 from src.policy.risk import RiskLimits
+from src.strategy.hybrid import HybridStrategy
 from src.strategy.judgment import JudgmentStrategy
 from src.strategy.trend import TrendFollowingStrategy
 
@@ -60,5 +61,13 @@ def build_arm(
             context_provider=context_provider,
         )
     if key == "D":
-        raise ValueError("arm D is not available yet (arrives in Fase 4).")
+        if judge is None:
+            raise ValueError("arm D requires a judge model (pass judge=...)")
+        return HybridStrategy(
+            judge,
+            effective_limits,
+            params=params,
+            context_provider=context_provider,
+            ma_window=ma_window,
+        )
     raise ValueError(f"unknown arm {name!r}; available: {', '.join(ARMS)}")

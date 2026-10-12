@@ -25,6 +25,7 @@ from src.backtest.calibration import (
     calibration_table,
     expected_calibration_error,
 )
+from src.backtest.compare import ArmSpec, ComparisonContext, compare_arms, render_comparison
 from src.backtest.engine import run_backtest
 from src.backtest.metrics import CostModel
 from src.backtest.report import ReportContext, render_markdown
@@ -42,6 +43,7 @@ from src.data.registry import build_data_provider
 from src.execution.venue import LiveTradingDisabledError, get_venue
 from src.judgment.factory import build_judge
 from src.judgment.jev import JevAdapter, JevClient, JevError, choice, noul, score
+from src.judgment.rules import RuleBasedJudge
 from src.strategy.arms import ARM_DESCRIPTIONS, build_arm
 from src.strategy.judgment import JudgmentStrategy
 
@@ -407,6 +409,81 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_compare(args: argparse.Namespace) -> int:
+    try:
+        universe = load_universe(args.universe)
+        params = load_strategy(args.strategy)
+        limits = load_risk()
+    except (ConfigError, ConfigLoadError) as exc:
+        print(f"[FAIL] configuration error: {exc}")
+        return 1
+
+    settings = load_settings()
+    try:
+        provider = _build_provider(settings, args)
+        bars_by_symbol, benchmark = _load_bars(provider, universe, args)
+    except DataError as exc:
+        print(f"[FAIL] data error: {exc}")
+        return 1
+    if not bars_by_symbol or not benchmark:
+        print("[FAIL] no bars available")
+        return 1
+
+    costs = CostModel(fee_bps=args.fee_bps, slippage_bps=args.slippage_bps)
+    specs: list[ArmSpec] = []
+    for key in [k.strip().upper() for k in args.arms.split(",") if k.strip()]:
+        judge = None
+        description = ARM_DESCRIPTIONS.get(key, "")
+        if key in {"B", "D"}:
+            judge = RuleBasedJudge()
+            description += " (offline rule-based judge)"
+        elif key == "C":
+            judge = build_judge("jev", settings)
+        try:
+            strategy = build_arm(
+                key,
+                judge=judge,
+                limits=limits,
+                params=params,
+                ma_window=args.ma_window,
+                max_positions=args.max_positions,
+            )
+        except ValueError as exc:
+            print(f"[FAIL] {exc}")
+            return 1
+        specs.append(ArmSpec(key=key, description=description, strategy=strategy))
+
+    results = compare_arms(specs, bars_by_symbol, benchmark, costs, initial_equity=args.equity)
+
+    print("CryptoCadence :: compare")
+    for result in results:
+        if result.report is None:
+            print(f"  arm {result.key}: error: {result.error}")
+            continue
+        brier = result.calibration["brier"] if result.calibration else None
+        print(
+            f"  arm {result.key}: cum {result.report['cumulative_return']:+.2%} "
+            f"excess {result.report['excess_return']:+.2%} "
+            f"sharpe {result.report['sharpe']:.3f} "
+            f"brier {'n/a' if brier is None else f'{brier:.3f}'}"
+        )
+
+    context = ComparisonContext(
+        title=args.title,
+        symbols=tuple(sorted(bars_by_symbol)),
+        benchmark=universe.benchmark,
+        data_source=f"CSV ({args.data_dir})" if args.provider == "csv" else f"{args.provider} (live)",
+        costs=costs,
+        data_is_synthetic=args.synthetic,
+    )
+    markdown = render_comparison(results, context)
+    out = Path(args.out) if args.out else Path("var/reports") / f"{date.today():%Y%m%d}_compare.md"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(markdown, encoding="utf-8")
+    print(f"wrote {out}")
+    return 0
+
+
 def _add_data_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--provider", default="csv", choices=["csv", "auto", "kraken", "coinbase"])
     p.add_argument("--data-dir", default=None, help="required when --provider csv")
@@ -468,6 +545,14 @@ def build_parser() -> argparse.ArgumentParser:
     _add_data_args(calibrate)
     calibrate.add_argument("--judge", default="rules", choices=["rules", "jev"])
     calibrate.set_defaults(func=cmd_calibrate)
+
+    compare = sub.add_parser("compare", help="compare experiment arms on the same data")
+    _add_data_args(compare)
+    compare.add_argument("--arms", default="A,B,D", help="comma-separated arms (A,B,C,D)")
+    compare.add_argument("--out", default=None, help="output markdown path")
+    compare.add_argument("--title", default="CryptoCadence — arm comparison")
+    compare.add_argument("--synthetic", action="store_true", help="mark data as synthetic")
+    compare.set_defaults(func=cmd_compare)
     return parser
 
 
