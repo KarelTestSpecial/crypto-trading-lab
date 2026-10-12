@@ -1,0 +1,8 @@
+# Strategy parameters. Weights live in code (PLAN §3), not in prompts.
+features:
+  return_windows: [1, 5, 20]
+  ma_windows: [20, 50, 200]
+  vol_window: 20
+  zscore_window: 60
+timeframe: 1d
+rebalance: daily_after_close

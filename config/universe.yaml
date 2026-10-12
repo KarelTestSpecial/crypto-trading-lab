@@ -1,0 +1,16 @@
+# Trading universe (liquid crypto pairs). Fase 1 loads this; pair naming is
+# canonical (BASE/QUOTE) and mapped to the venue's symbols by the data layer
+# (e.g. Kraken XBTUSD, Coinbase BTC-USD). Benchmark = BTC buy-and-hold.
+symbols:
+  - BTC/USDT
+  - ETH/USDT
+  - SOL/USDT
+  - BNB/USDT
+  - XRP/USDT
+  - ADA/USDT
+  - AVAX/USDT
+  - LINK/USDT
+  - DOGE/USDT
+  - DOT/USDT
+benchmark: BTC/USDT
+timeframe: 1d
