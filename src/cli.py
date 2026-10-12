@@ -6,6 +6,8 @@ Commands:
                  calibrated judgments (demonstrates arm C). Requires a key.
   * `backtest` — run the backtest over crypto bars and print an honest report
                  (BTC benchmark + costs are mandatory).
+  * `report`   — run the backtest and write a publishable Markdown report
+                 (walk-forward by default).
 """
 
 from __future__ import annotations
@@ -15,9 +17,12 @@ import json
 import sys
 from collections.abc import Sequence
 from datetime import date
+from pathlib import Path
 
 from src.backtest.engine import run_backtest
 from src.backtest.metrics import CostModel
+from src.backtest.report import ReportContext, render_markdown
+from src.backtest.walkforward import run_walk_forward
 from src.config import ConfigError, TradingMode, load_settings
 from src.config_loader import (
     ConfigLoadError,
@@ -26,11 +31,11 @@ from src.config_loader import (
     load_strategy,
     load_universe,
 )
-from src.data.base import DataError
+from src.data.base import Bar, DataError
 from src.data.registry import build_data_provider
 from src.execution.venue import LiveTradingDisabledError, get_venue
 from src.judgment.jev import JevAdapter, JevClient, JevError, choice, noul, score
-from src.strategy.trend import TrendFollowingStrategy
+from src.strategy.arms import ARM_DESCRIPTIONS, build_arm
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
@@ -116,6 +121,17 @@ def _window(args: argparse.Namespace) -> tuple[date, date]:
     return start, end
 
 
+def _load_bars(provider, universe: UniverseConfig, args):
+    start, end = _window(args)
+    bars_by_symbol: dict[str, list[Bar]] = {}
+    for symbol in universe.symbols:
+        bars = provider.bars(symbol, start, end, universe.timeframe)
+        if bars:
+            bars_by_symbol[symbol] = bars
+    benchmark = provider.bars(universe.benchmark, start, end, universe.timeframe)
+    return bars_by_symbol, benchmark
+
+
 def _fmt(value, pct: bool = False) -> str:
     if value is None:
         return "n/a"
@@ -137,9 +153,7 @@ def _print_report(report: dict, universe: UniverseConfig, n_trades: int, args) -
     )
     print(f"  {'excess return':<22}{_fmt(report['excess_return'], pct=True):>14}{'':>14}")
     print(f"  {'annualized return':<22}{_fmt(report['annualized_return'], pct=True):>14}{'':>14}")
-    print(
-        f"  {'sharpe':<22}{_fmt(report['sharpe']):>14}{_fmt(report['benchmark_sharpe']):>14}"
-    )
+    print(f"  {'sharpe':<22}{_fmt(report['sharpe']):>14}{_fmt(report['benchmark_sharpe']):>14}")
     print(
         f"  {'max drawdown':<22}"
         f"{_fmt(report['max_drawdown'], pct=True):>14}"
@@ -148,6 +162,12 @@ def _print_report(report: dict, universe: UniverseConfig, n_trades: int, args) -
     print(f"  {'hit rate':<22}{_fmt(report['hit_rate'], pct=True):>14}{'':>14}")
     print()
     print(f"  trades         = {n_trades}")
+
+
+def _build_provider(settings, args):
+    if args.provider == "csv" and not args.data_dir:
+        raise DataError("--provider csv requires --data-dir")
+    return build_data_provider(settings, name=args.provider, csv_dir=args.data_dir)
 
 
 def cmd_backtest(args: argparse.Namespace) -> int:
@@ -160,23 +180,9 @@ def cmd_backtest(args: argparse.Namespace) -> int:
         return 1
 
     settings = load_settings()
-    if args.provider == "csv" and not args.data_dir:
-        print("[FAIL] --provider csv requires --data-dir")
-        return 1
     try:
-        provider = build_data_provider(settings, name=args.provider, csv_dir=args.data_dir)
-    except DataError as exc:
-        print(f"[FAIL] data error: {exc}")
-        return 1
-
-    start, end = _window(args)
-    try:
-        bars_by_symbol = {}
-        for symbol in universe.symbols:
-            bars = provider.bars(symbol, start, end, universe.timeframe)
-            if bars:
-                bars_by_symbol[symbol] = bars
-        benchmark = provider.bars(universe.benchmark, start, end, universe.timeframe)
+        provider = _build_provider(settings, args)
+        bars_by_symbol, benchmark = _load_bars(provider, universe, args)
     except DataError as exc:
         print(f"[FAIL] data error: {exc}")
         return 1
@@ -184,9 +190,8 @@ def cmd_backtest(args: argparse.Namespace) -> int:
         print("[FAIL] no bars available")
         return 1
 
-    max_pct = args.max_position_pct if args.max_position_pct is not None else limits.max_position_pct
-    strategy = TrendFollowingStrategy(
-        ma_window=args.ma_window, max_positions=args.max_positions, max_position_pct=max_pct
+    strategy = build_arm(
+        "A", limits=limits, ma_window=args.ma_window, max_positions=args.max_positions
     )
     costs = CostModel(fee_bps=args.fee_bps, slippage_bps=args.slippage_bps)
     try:
@@ -202,6 +207,106 @@ def cmd_backtest(args: argparse.Namespace) -> int:
         print()
         print(json.dumps(result.report, indent=2, sort_keys=True))
     return 0
+
+
+def _parse_grid(raw: str) -> list[float]:
+    grid = [float(part) for part in raw.split(",") if part.strip()]
+    if not grid:
+        raise ValueError("--ma-grid must contain at least one number")
+    return grid
+
+
+def cmd_report(args: argparse.Namespace) -> int:
+    try:
+        universe = load_universe(args.universe)
+        load_strategy(args.strategy)
+        limits = load_risk()
+        grid = _parse_grid(args.ma_grid)
+    except (ConfigError, ConfigLoadError, ValueError) as exc:
+        print(f"[FAIL] configuration error: {exc}")
+        return 1
+
+    settings = load_settings()
+    try:
+        provider = _build_provider(settings, args)
+        bars_by_symbol, benchmark = _load_bars(provider, universe, args)
+    except DataError as exc:
+        print(f"[FAIL] data error: {exc}")
+        return 1
+    if not bars_by_symbol or not benchmark:
+        print("[FAIL] no bars available")
+        return 1
+
+    def arm_factory(ma_window: float):
+        return build_arm(
+            "A", limits=limits, ma_window=int(ma_window), max_positions=args.max_positions
+        )
+
+    costs = CostModel(fee_bps=args.fee_bps, slippage_bps=args.slippage_bps)
+    try:
+        if args.no_walk_forward:
+            result = run_backtest(
+                bars_by_symbol, benchmark, arm_factory(grid[0]), costs, initial_equity=args.equity
+            )
+            report = result.report
+            folds: list[dict] = []
+        else:
+            wf = run_walk_forward(
+                bars_by_symbol,
+                benchmark,
+                arm_factory,
+                costs,
+                param_grid=grid,
+                n_folds=args.folds,
+                initial_train_frac=args.train_frac,
+                initial_equity=args.equity,
+            )
+            report = wf.report
+            folds = wf.folds
+    except ValueError as exc:
+        print(f"[FAIL] backtest error: {exc}")
+        return 1
+
+    context = ReportContext(
+        title=args.title,
+        symbols=tuple(sorted(bars_by_symbol)),
+        benchmark=universe.benchmark,
+        strategy=f"arm A — {ARM_DESCRIPTIONS.get('A', '')}",
+        data_source=f"CSV ({args.data_dir})" if args.provider == "csv" else f"{args.provider} (live)",
+        data_is_synthetic=args.synthetic,
+        walk_forward=not args.no_walk_forward,
+        start=date.fromisoformat(args.start) if args.start else None,
+        end=date.fromisoformat(args.end) if args.end else None,
+        folds=folds,
+    )
+    markdown = render_markdown(report, context)
+
+    out = Path(args.out) if args.out else Path("var/reports") / f"{date.today():%Y%m%d}_backtest.md"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(markdown, encoding="utf-8")
+    print(f"wrote {out}")
+    if args.json:
+        json_path = out.with_suffix(".json")
+        json_path.write_text(
+            json.dumps({"report": report, "folds": folds}, indent=2, sort_keys=True, default=str),
+            encoding="utf-8",
+        )
+        print(f"wrote {json_path}")
+    return 0
+
+
+def _add_data_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--provider", default="csv", choices=["csv", "auto", "kraken", "coinbase"])
+    p.add_argument("--data-dir", default=None, help="required when --provider csv")
+    p.add_argument("--universe", default=None, help="path to universe.yaml")
+    p.add_argument("--strategy", default=None, help="path to strategy.yaml")
+    p.add_argument("--start", default=None, help="ISO start date (inclusive)")
+    p.add_argument("--end", default=None, help="ISO end date (inclusive)")
+    p.add_argument("--ma-window", type=int, default=50, help="trend moving-average window")
+    p.add_argument("--max-positions", type=int, default=None)
+    p.add_argument("--fee-bps", type=float, default=10.0, help="per-side fee in bps")
+    p.add_argument("--slippage-bps", type=float, default=10.0, help="per-side slippage in bps")
+    p.add_argument("--equity", type=float, default=100_000.0, help="initial equity")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -225,22 +330,21 @@ def build_parser() -> argparse.ArgumentParser:
     probe.set_defaults(func=cmd_probe)
 
     backtest = sub.add_parser("backtest", help="run the backtest over crypto bars")
-    backtest.add_argument(
-        "--provider", default="csv", choices=["csv", "auto", "kraken", "coinbase"]
-    )
-    backtest.add_argument("--data-dir", default=None, help="required when --provider csv")
-    backtest.add_argument("--universe", default=None, help="path to universe.yaml")
-    backtest.add_argument("--strategy", default=None, help="path to strategy.yaml")
-    backtest.add_argument("--start", default=None, help="ISO start date (inclusive)")
-    backtest.add_argument("--end", default=None, help="ISO end date (inclusive)")
-    backtest.add_argument("--ma-window", type=int, default=50, help="trend moving-average window")
-    backtest.add_argument("--max-positions", type=int, default=6)
-    backtest.add_argument("--max-position-pct", type=float, default=None)
-    backtest.add_argument("--fee-bps", type=float, default=10.0, help="per-side fee in bps")
-    backtest.add_argument("--slippage-bps", type=float, default=10.0, help="per-side slippage in bps")
-    backtest.add_argument("--equity", type=float, default=100_000.0, help="initial equity")
+    _add_data_args(backtest)
     backtest.add_argument("--json", action="store_true", help="also print the raw report JSON")
     backtest.set_defaults(func=cmd_backtest)
+
+    report = sub.add_parser("report", help="write a publishable Markdown backtest report")
+    _add_data_args(report)
+    report.add_argument("--out", default=None, help="output markdown path")
+    report.add_argument("--title", default="CryptoCadence — backtest report")
+    report.add_argument("--json", action="store_true", help="also write the raw report JSON")
+    report.add_argument("--synthetic", action="store_true", help="mark data as synthetic")
+    report.add_argument("--no-walk-forward", action="store_true", help="use a single window")
+    report.add_argument("--ma-grid", default="20,50,100", help="comma-separated MA candidates")
+    report.add_argument("--folds", type=int, default=5, help="number of walk-forward folds")
+    report.add_argument("--train-frac", type=float, default=0.4, help="initial in-sample fraction")
+    report.set_defaults(func=cmd_report)
     return parser
 
 
