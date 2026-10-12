@@ -13,6 +13,8 @@ and moves no real money. Live execution is hard-gated and impossible in public-d
 > **Not investment advice. Simulation only. Past performance — real or simulated — is
 > not indicative of future results.** See [DISCLAIMER.md](DISCLAIMER.md) and [RISICO.md](RISICO.md).
 
+**Live dashboard:** https://kareltestspecial.github.io/crypto-trading-lab/
+
 ## Why this is different from a "trading bot"
 
 - **Honesty enforced in code.** A performance report *cannot* be produced without a
