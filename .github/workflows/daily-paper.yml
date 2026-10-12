@@ -1,0 +1,60 @@
+# Daily paper-trading loop (CryptoCadence).
+#
+# Runs once a day, places simulated (paper) orders via the built-in wallet,
+# appends to journal/decisions.jsonl and commits it, so the public git history
+# becomes a tamper-evident track record.
+#
+# No secrets required: crypto market data is read from public Kraken/Coinbase
+# endpoints (keyless). Safety is enforced in code: TRADING_MODE=paper and
+# PUBLIC_DEMO=true make live trading impossible, and `doctor` re-checks that
+# before anything runs.
+
+name: daily-paper
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "15 0 * * *"  # 00:15 UTC daily
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-paper
+  cancel-in-progress: false
+
+jobs:
+  paper-run:
+    runs-on: ubuntu-latest
+    env:
+      TRADING_MODE: paper
+      PUBLIC_DEMO: "true"
+      ALLOW_LIVE_TRADING: "false"
+      HITL: "true"
+      VENUE: paper
+      JOURNAL_PATH: journal/decisions.jsonl
+      PAPER_ARM: A
+      PAPER_JUDGE: rules
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Verify safety gates
+        run: uv run python -m src.cli doctor
+
+      - name: Run one paper cycle
+        run: uv run python -m src.cli paper-run --provider auto --arm A
+
+      - name: Commit the journal
+        run: |
+          git config user.name "crypto-trading-lab bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add journal/decisions.jsonl
+          if git diff --cached --quiet; then
+            echo "No journal changes to commit."
+          else
+            git commit -m "paper: decision $(date -u +%Y-%m-%d)"
+            git push
+          fi

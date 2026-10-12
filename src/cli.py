@@ -41,9 +41,11 @@ from src.config_loader import (
 from src.data.base import Bar, DataError
 from src.data.registry import build_data_provider
 from src.execution.venue import LiveTradingDisabledError, get_venue
+from src.journal.journal import Journal
 from src.judgment.factory import build_judge
 from src.judgment.jev import JevAdapter, JevClient, JevError, choice, noul, score
 from src.judgment.rules import RuleBasedJudge
+from src.loop import run_paper_once
 from src.strategy.arms import ARM_DESCRIPTIONS, build_arm
 from src.strategy.judgment import JudgmentStrategy
 
@@ -484,6 +486,76 @@ def cmd_compare(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_paper_run(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    try:
+        universe = load_universe(args.universe)
+        params = load_strategy(args.strategy)
+        limits = load_risk()
+    except (ConfigError, ConfigLoadError) as exc:
+        print(f"[FAIL] configuration error: {exc}")
+        return 1
+
+    arm = args.arm.strip().upper()
+    try:
+        judge = build_judge(args.judge, settings) if arm in {"B", "C", "D"} else None
+        strategy = build_arm(
+            arm,
+            judge=judge,
+            limits=limits,
+            params=params,
+            ma_window=args.ma_window,
+            max_positions=args.max_positions,
+        )
+        venue = get_venue(settings)
+    except (ValueError, JevError, LiveTradingDisabledError) as exc:
+        print(f"[FAIL] {exc}")
+        return 1
+
+    try:
+        provider = _build_provider(settings, args)
+        bars_by_symbol, _ = _load_bars(provider, universe, args)
+    except DataError as exc:
+        print(f"[FAIL] data error: {exc}")
+        return 1
+    if not bars_by_symbol:
+        print("[FAIL] no bars available")
+        return 1
+
+    journal = Journal(settings.journal_path)
+    try:
+        record = run_paper_once(
+            strategy=strategy,
+            venue=venue,
+            bars_by_symbol=bars_by_symbol,
+            journal=journal,
+            limits=limits,
+            dry_run=args.dry_run,
+        )
+    except (ValueError, JevError) as exc:
+        print(f"[FAIL] {exc}")
+        return 1
+
+    print("CryptoCadence :: paper-run")
+    print(f"  as_of       = {record['as_of']}")
+    print(f"  arm         = {arm}")
+    print(f"  venue       = {venue.kind.value}")
+    print(f"  dry_run     = {record['dry_run']}")
+    print(f"  equity      = {record['account_equity']:.2f}")
+    print(f"  drawdown    = {record['drawdown_pct']:.2%}")
+    print(f"  target      = {record['target_weights']}")
+    print(f"  submitted   = {len(record['submitted'])} order(s)")
+    for order in record["submitted"]:
+        print(f"    {order['side']:<4} {order['symbol']:<10} qty={order['qty']} ~{order['notional']:.2f}")
+    if record["vetoed"]:
+        print(f"  vetoed      = {len(record['vetoed'])} order(s)")
+        for order in record["vetoed"]:
+            print(f"    {order['side']:<4} {order['symbol']:<10} blocked: {order['veto_reason']}")
+    if not args.dry_run:
+        print(f"  journal     = {settings.journal_path}")
+    return 0
+
+
 def _add_data_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--provider", default="csv", choices=["csv", "auto", "kraken", "coinbase"])
     p.add_argument("--data-dir", default=None, help="required when --provider csv")
@@ -553,6 +625,13 @@ def build_parser() -> argparse.ArgumentParser:
     compare.add_argument("--title", default="CryptoCadence — arm comparison")
     compare.add_argument("--synthetic", action="store_true", help="mark data as synthetic")
     compare.set_defaults(func=cmd_compare)
+
+    paper = sub.add_parser("paper-run", help="run one daily paper-trading cycle")
+    _add_data_args(paper)
+    paper.add_argument("--arm", default="A", help="experiment arm (A..D)")
+    paper.add_argument("--judge", default="rules", choices=["rules", "jev"])
+    paper.add_argument("--dry-run", action="store_true", help="plan orders without submitting")
+    paper.set_defaults(func=cmd_paper_run)
     return parser
 
 

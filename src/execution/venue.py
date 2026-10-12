@@ -86,6 +86,9 @@ class Venue(ABC):
     def account(self) -> Account:
         """Return the account snapshot (equity, cash, ...)."""
 
+    def set_marks(self, prices: dict[str, float]) -> None:
+        """Set mark prices. No-op by default; PaperVenue overrides."""
+
 
 class PaperVenue(Venue):
     """Simulated wallet: no keys, no network, fills at the supplied mark price."""
@@ -146,6 +149,25 @@ class PaperVenue(Venue):
         return Account(
             equity=equity, cash=self._cash, buying_power=self._cash, last_equity=self._initial_cash
         )
+
+    def state(self) -> dict:
+        """Serialise the simulated wallet so the daily loop can persist it."""
+        return {
+            "initial_cash": self._initial_cash,
+            "cash": self._cash,
+            "positions": {
+                symbol: {"qty": qty, "basis": self._basis.get(symbol, 0.0)}
+                for symbol, qty in self._qty.items()
+            },
+        }
+
+    def load_state(self, state: dict) -> None:
+        """Restore a simulated wallet from a previous run (journal-backed)."""
+        self._initial_cash = float(state.get("initial_cash", self._initial_cash))
+        self._cash = float(state.get("cash", self._cash))
+        positions = state.get("positions") or {}
+        self._qty = {s: float(p["qty"]) for s, p in positions.items()}
+        self._basis = {s: float(p.get("basis", 0.0)) for s, p in positions.items()}
 
 
 class CexVenue(Venue):

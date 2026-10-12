@@ -39,7 +39,7 @@ and moves no real money. Live execution is hard-gated and impossible in public-d
 | **2** | Baseline rules (arm A) + honest metrics report | ⏳ |
 | **3** | **Jev wired as arm C** + calibration (Brier/ECE) | ✅ 12/10/2026 |
 | **4** | Hybrid (arm D) + `compare-arms` | ✅ 12/10/2026 |
-| **5** | Daily paper loop + journal-in-git + dashboard | ⏳ |
+| **5** | Daily paper loop + journal-in-git + dashboard | ✅ 12/10/2026 |
 | **6** | Showcase package + client-facing config/docs | ⏳ |
 
 ## Quick start
