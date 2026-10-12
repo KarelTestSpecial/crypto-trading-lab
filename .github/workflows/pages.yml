@@ -1,0 +1,64 @@
+# Builds the static dashboard and deploys it to GitHub Pages.
+#
+# Enable once in the repository: Settings -> Pages -> Build and deployment ->
+# Source: GitHub Actions. Then this runs on every push to main (which includes
+# the daily journal commit) and can be triggered manually.
+
+name: pages
+
+on:
+  push:
+    branches: [main]
+  # The daily-paper action commits the journal with GITHUB_TOKEN, and GitHub
+  # does not start new workflow runs for pushes made with that token — so a
+  # push trigger alone would leave the dashboard one day behind. workflow_run
+  # does fire, and rebuilds the site from the fresh commit.
+  workflow_run:
+    workflows: [daily-paper]
+    types: [completed]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # pnpm 12 (same version as local): pnpm-workspace.yaml carries
+      # allowBuilds-config and no packages field, which pnpm 9 rejects.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.3.4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: dashboard/pnpm-lock.yaml
+      - name: Install
+        working-directory: dashboard
+        run: pnpm install --frozen-lockfile
+      - name: Build
+        working-directory: dashboard
+        run: pnpm build
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dashboard/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

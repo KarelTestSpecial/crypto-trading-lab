@@ -1,43 +1,76 @@
-# Capability narrative — CryptoCadence (2 minutes)
+# Capability narrative
 
-## What it is
+A 2-minute read for a technical evaluator (a hiring manager, a client, a peer).
 
-CryptoCadence is a **transparent AI-driven paper-trading and backtest platform for
-crypto**, built to demonstrate a production-shaped quant/automation stack. It is the
-crypto counterpart of Cadence (`ai-trading-lab`), with one key upgrade: the AI decision
-layer is **Jev**, a calibrated "System One" model, wired in for real.
+## One-liner
 
-## The three things that make it credible
+A public, transparent **AI trading and backtesting platform for crypto**
+(daily/swing): the engine, the data layer, a **calibrated AI decision layer
+(Jev)** and the daily paper loop are all built from scratch in dependency-light
+Python, with honesty and safety enforced in code rather than promised in a README.
 
-1. **Honesty is enforced in code, not promised.**
-   `build_report()` refuses to emit a performance report unless a benchmark
-   (BTC buy-and-hold) *and* a cost model (fees + slippage) are supplied. Testing is
-   walk-forward / out-of-sample. The report lists its own limitations.
+## What I built
 
-2. **The AI is calibrated, not generative.**
-   Jev returns *typed* decisions — `choice` (key + probabilities + confidence), `score`
-   (ordered scale) and `noul` (yes/no probability) — instead of text. Every judgment
-   carries a confidence, and the system measures whether "80% sure" really is right
-   ~80% of the time (**Brier/ECE**). That is the difference between a demo and a system
-   you can trust in a pipeline.
+A complete pipeline, not a script:
 
-3. **The track record is tamper-evident.**
-   Every decision (snapshot + rationale + outcome) is appended to
-   `journal/decisions.jsonl` and committed, so the public git history *is* the audit
-   trail.
+```
+Data → Features → Context → Judgment (Jev) → Policy → Risk veto → Execution → Journal
+```
 
-## Safety by construction
+- **Data layer** — Kraken (primary, MiCA-approved EU) + Coinbase (fallback) public
+  endpoints, keyless to read; CSV offline; one standard-library HTTP client, no
+  vendor SDK. Binance is used only for deep backtest history.
+- **Feature engine** — deterministic snapshots (returns, MA distances, z-scores,
+  volatility). No black boxes.
+- **Backtest engine** — walk-forward, look-ahead-free, costs on turnover, **BTC
+  buy-and-hold benchmark mandatory**.
+- **AI layer** — a pluggable judgment model. **Jev** (TypeSafe "System One")
+  returns *typed, calibrated* decisions — `choice`, `score`, `noul` — instead of
+  text; a deterministic offline judge is the comparator.
+- **Policy + hard risk vetoes** — weights live in code; drawdown, daily-loss,
+  gross-exposure, position-count and position-size limits have absolute veto power.
+- **Paper loop** — a daily GitHub Action reads public crypto data, places
+  simulated orders (the wallet's state is persisted in the journal) and commits an
+  append-only journal, so the track record is tamper-evident. **No secrets required.**
+- **Dashboard** — a static site (Vite + TypeScript, no chart libraries) that
+  renders the committed journal.
 
-- **Simulation by default.** Paper wallet; no keys, no network, no real money.
-- **Live is hard-gated.** Real capital needs three simultaneous gates
-  (`TRADING_MODE=live` + `ALLOW_LIVE_TRADING=true` + `confirm_live=True`); the public
-  demo can never go live.
-- **HITL is a flag.** Paper runs fully autonomously; live defaults to human
-  confirmation per order.
-- **Hard risk vetoes** (position size, gross exposure, daily loss, drawdown, max
-  positions) that the model can never override.
+## Key engineering decisions
 
-## Honest scope
+1. **Code computes, the model judges.** All arithmetic is deterministic; the model
+   only supplies fuzzy judgments with calibrated confidence.
+2. **Calibration is measured, not claimed.** Jev is built for calibration (RLCD);
+   every confidence is scored against realised outcomes (Brier/ECE), so "80% sure"
+   can be checked.
+3. **Honesty enforced in code.** A performance report *cannot* be produced without
+   a benchmark and a cost model; the report always states its own limitations.
+4. **No silent fallback.** A missing key, an unwired model, or a malformed answer
+   fails loudly — a judgment never quietly becomes a trade.
+5. **Live trading is hard-gated; HITL is a flag.** Three independent live gates plus
+   a public-demo switch that makes live impossible; paper runs fully autonomously,
+   live defaults to human confirmation per order.
+6. **Dependency-light by design.** No pandas/numpy, no LLM SDK, no HTTP client
+   library — the whole system is auditable and runs offline in tests.
 
-This is **not** HFT — that is a latency race a cloud agent cannot win. CryptoCadence
-operates at a 1h–1d cadence, where the calibrated judgment layer is the edge, not speed.
+## What I deliberately did not do
+
+- **No HFT.** Crypto HFT is a latency race a cloud agent cannot win; this operates
+  at a 1h–1d cadence, where the calibrated judgment layer is the edge.
+- No proprietary-feed reverse-engineering, no live trading, no profitability claims.
+- No fabricated track record: the dashboard shows the real journal, not seeded numbers.
+
+## How to verify it yourself
+
+```bash
+uv run --group dev pytest -q                 # 90+ tests, offline
+uv run python -m src.cli doctor              # safety gates
+uv run python scripts/make_sample_data.py --out var/sample_bars
+uv run python -m src.cli backtest --provider csv --data-dir var/sample_bars
+uv run python -m src.cli report   --provider csv --data-dir var/sample_bars --synthetic
+uv run python -m src.cli compare  --provider csv --data-dir var/sample_bars --synthetic --arms A,B,C,D
+uv run python -m src.cli calibrate --provider csv --data-dir var/sample_bars --judge rules
+uv run python -m src.cli paper-run --provider csv --data-dir var/sample_bars --arm A --dry-run
+```
+
+Then read `ARCHITECTURE.md`, `RISICO.md`, the generated reports, and the
+`journal/decisions.jsonl` git history.
